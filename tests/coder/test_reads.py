@@ -18,20 +18,19 @@ class TestCoder:
         (tmp_path / 'file').write_bytes(original.encode('utf-8'))
         offset = 0
         contents: list[str] = []
-        for _ in range(3):
+        output = ''
+        while not output.endswith('[End of file.]'):
+            assert len(contents) < 3, 'Reading did not reach EOF.'
             output = await call(tmp_path, 'read_file', {'path': 'file', 'offset': offset})
             assert len(output) <= 64000
             body = output.partition('\n')[2].rpartition('\n[')[0]
             contents.append(re.sub(r'^\d+: ', '', body, flags=re.MULTILINE))
-            if output.endswith('[End of file.]'):
-                break
-            match = re.search(r'Use offset=(\d+) to continue\.', output)
-            assert match is not None
-            next_offset = int(match.group(1))
-            assert next_offset > offset
-            offset = next_offset
-        else:
-            pytest.fail('Reading did not reach EOF.')
+            if not output.endswith('[End of file.]'):
+                match = re.search(r'Use offset=(\d+) to continue\.', output)
+                assert match is not None
+                next_offset = int(match.group(1))
+                assert next_offset > offset
+                offset = next_offset
         assert ''.join(contents) == original
 
     @pytest.mark.parametrize('ending', [b'\n', b'\r\n', b''])
