@@ -276,7 +276,9 @@ class TestCoder:
         (tmp_path / 'loop').symlink_to('loop')
         assert 'Cannot resolve' in await call(tmp_path, 'list_files', {'path': 'loop'})
 
-    @pytest.mark.parametrize('content,expected', [(b'a\0b', 'Binary file'), (b'a' * 70000, 'Line exceeds')])
+    @pytest.mark.parametrize(
+        'content,expected', [(b'a\0b', 'Binary file'), (b'a' * 70000, 'Line 1 exceeds')], ids=['binary', 'oversized']
+    )
     async def test_read_special_content(self, tmp_path: Path, content: bytes, expected: str) -> None:
         (tmp_path / 'file').write_bytes(content)
         assert expected in await call(tmp_path, 'read_file', {'path': 'file'})
@@ -289,7 +291,7 @@ class TestCoder:
         (tmp_path / 'file').write_text('a' * 40000 + '\n' + 'b' * 40000 + '\n')
         assert len(await call(tmp_path, 'read_file', {'path': 'file'})) < 64000
         (tmp_path / 'file').write_text('')
-        assert 'Read window' in await call(tmp_path, 'read_file', {'path': 'file'})
+        assert '[End of file.]' in await call(tmp_path, 'read_file', {'path': 'file'})
 
     async def test_binary_edit(self, tmp_path: Path) -> None:
         path = tmp_path / 'file'

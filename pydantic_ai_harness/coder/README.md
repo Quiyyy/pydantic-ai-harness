@@ -93,12 +93,25 @@ uvx --with "pydantic-ai-harness[coder]" clai -a pydantic_ai_harness.coder:coder_
 
 | Tool | Behavior |
 | --- | --- |
-| `read_file(path, offset=0, limit=None)` | Zero-based line offset, one-based displayed line numbers, up to 2,000 lines. No hash header. Reads stream up to 60,000 content characters; lines above 65,536 bytes require shell inspection. |
+| `read_file(path, offset=0, limit=None)` | Complete lines with zero-based offset and one-based displayed line numbers, up to 2,000 lines and 60,000 characters of numbered text. Returns a continuation offset or an explicit EOF notice. No hash header. |
 | `write_file(path, content)` | Replace a file or create it in an existing directory. No expected hash. |
 | `edit_file(path, old_text=..., new_text=...)` | Replace exactly one occurrence of a non-empty string. |
 | `list_files(path='.', glob=None, limit=200)` | `rg --files`, respecting ignore rules. Returns at most 1,000 lines. |
 | `grep(pattern, ...)` | Ripgrep search with `path`, `glob`, `file_type`, `ignore_case`, `literal`, `context` (0-20), and `limit` (1-1,000). |
 | `shell(command, mode='foreground', timeout=270)` | Unrestricted foreground or background commands rooted at the workspace. |
+
+File reads stop before a line that does not fit the remaining character budget. When more content
+remains, the response gives the exact next zero-based `offset`: after returning lines 1-20, use
+`offset=20` to start at line 21. `[End of file.]` marks completion, including empty files and offsets
+at or beyond EOF.
+
+A requested line exceeding 65,536 bytes (including its line ending), or the entire 60,000-character
+window including its displayed line number, is not returned. The response preserves preceding lines,
+identifies the oversized line, and directs the agent to `shell` for bounded byte-range inspection.
+It also gives the offset to skip that line. Oversized lines before the requested offset are skipped
+in bounded chunks without changing the logical line count. Reads do not load the whole file or
+calculate its total line count. The final response, including its header and notices, is capped at
+64,000 characters; unusually long path labels are abbreviated to preserve content and continuation.
 
 Edits also accept `replacements=[{'old_text': 'before', 'new_text': 'after'}, ...]` instead of the single pair.
 Each replacement must match exactly once in the result of the preceding replacement. All replacements are

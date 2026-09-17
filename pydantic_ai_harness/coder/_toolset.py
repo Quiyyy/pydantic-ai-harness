@@ -15,6 +15,7 @@ from pydantic_ai import ModelRetry, RunContext
 from pydantic_ai.tools import AgentDepsT
 from pydantic_ai.toolsets import FunctionToolset
 
+from pydantic_ai_harness.coder._read import read_window
 from pydantic_ai_harness.coder._shell import shell
 from pydantic_ai_harness.filesystem import FileSystem, FileSystemToolset
 from pydantic_ai_harness.filesystem._changes import Change
@@ -60,7 +61,11 @@ class CoderToolset(FunctionToolset[AgentDepsT]):
     async def read_file(
         self, ctx: RunContext[AgentDepsT], path: str, *, offset: int = 0, limit: int | None = None
     ) -> str:
-        """Read a file with zero-based offset and one-based line numbers, without hashes."""
+        """Read complete lines with zero-based offset and one-based line numbers.
+
+        Follow the returned offset to continue, or use shell for a line that exceeds
+        the read window. Reaching EOF is reported explicitly. No hashes are returned.
+        """
         if offset < 0 or (limit is not None and limit <= 0):
             raise ModelRetry('offset must be non-negative and limit positive.')
         limit = min(limit or 2000, 2000)
@@ -71,28 +76,9 @@ class CoderToolset(FunctionToolset[AgentDepsT]):
             with os.fdopen(descriptor, 'rb') as source:
                 if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
                     raise ModelRetry('Reads require a regular file.')
-                output: list[str] = []
-                number = 0
-                budget = 60000
-                while budget > 0:
-                    line = source.readline(65536)
-                    if not line:
-                        break
-                    if b'\0' in line:
-                        return '[Binary file; use a binary-aware tool.]'
-                    number += 1
-                    if len(line) == 65536 and not line.endswith(b'\n'):
-                        return '[Line exceeds 65,536 bytes; use shell for a bounded byte-range inspection.]'
-                    if number <= offset:
-                        continue
-                    rendered = f'{number}: {line.decode("utf-8", errors="replace")}'
-                    output.append(rendered[:budget])
-                    budget -= len(rendered)
-                    if len(output) >= limit:
-                        break
+                return read_window(source, path=path, offset=offset, limit=limit)
         except (OSError, RuntimeError, ValueError) as exc:
             raise ModelRetry(f'Cannot read {path!r}: {exc}') from exc
-        return f'[{path}]\n' + ''.join(output) + '\n[Read window; use offset/limit to continue.]'
 
     async def write_file(self, ctx: RunContext[AgentDepsT], path: str, content: str) -> str:
         """Write a complete file. Create missing parent directories with shell mkdir first."""
