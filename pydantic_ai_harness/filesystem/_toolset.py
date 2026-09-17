@@ -176,11 +176,16 @@ def _recoverable(
     return wrapper
 
 
+_NOTICE_CHARS = 200
+"""Room reserved for the longest continuation or oversized-line notice `_format_lines` appends."""
+
+
 def _format_lines(lines: Sequence[str], offset: int, limit: int, max_chars: int | None = None) -> str:
     """Format pre-split lines with line numbers and continuation hint.
 
-    With `max_chars`, the window ends on the last complete numbered line that
+    With `max_chars`, the numbered lines end on the last complete one that
     fits, so the continuation offset always names the first line not shown.
+    The notice appended after them is not counted; callers reserve `_NOTICE_CHARS`.
     """
     total = len(lines)
 
@@ -197,8 +202,8 @@ def _format_lines(lines: Sequence[str], offset: int, limit: int, max_chars: int 
         if budget is not None and len(rendered) > budget:
             if not numbered:
                 return (
-                    f'... (Line {number} is {len(line):,} characters and does not fit the {max_chars:,}-character '
-                    f'read window. Use offset={number} to skip it, or a shell byte range to inspect it.)\n'
+                    f'... (Line {number} is {len(line):,} characters and does not fit the read window. '
+                    f'Use offset={number} to skip it, or a shell byte range to inspect it.)\n'
                 )
             break
         numbered.append(rendered)
@@ -685,14 +690,26 @@ class FileSystemToolset(FunctionToolset[AgentDepsT]):
 
         text = raw.decode('utf-8', errors='replace')
         lines = text.splitlines(keepends=True)
+        header = self._read_header(path, len(lines), content_hash)
         # Format before emitting: an out-of-range offset is a failed read, and
         # a failed read must not look like a successful one to subscribers.
-        body = _format_lines(lines, offset, limit, self._max_read_chars)
+        body = _format_lines(lines, offset, limit, self._body_budget(header))
         if ctx is not None:
             await ctx.emit(FileReadEvent(**self._event_location(resolved), content_hash=content_hash))
-
-        header = f'[{path} | {len(lines)} lines{" | hash:" + content_hash if self._content_hashes else ""}]\n'
         return header + body
+
+    def _read_header(self, path: str, total: int, content_hash: str) -> str:
+        label = path
+        if self._max_read_chars is not None and len(path) > self._max_read_chars // 4:
+            # The label echoes what the model passed; keep a long one from eating the window.
+            label = '...' + path[-(self._max_read_chars // 4) :]
+        return f'[{label} | {total} lines{" | hash:" + content_hash if self._content_hashes else ""}]\n'
+
+    def _body_budget(self, header: str) -> int | None:
+        """Characters left for numbered lines once the header and the longest notice are counted."""
+        if self._max_read_chars is None:
+            return None
+        return max(self._max_read_chars - len(header) - _NOTICE_CHARS, 0)
 
     def _hash_suffix(self, content_hash: str) -> str:
         """The hash a write or edit result shows the model, or nothing when `content_hashes` is off."""
